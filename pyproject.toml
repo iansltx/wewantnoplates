@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wewantnoplates"
+version = "0.1.0"
+description = "Turn food on a plate into food defiantly NOT on a plate (r/wewantplates style)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "click>=8.1",
+    "pillow>=10.0",
+    "requests>=2.31",
+    "ollama>=0.3",
+]
+
+[project.optional-dependencies]
+# Heavy deps for the LOCAL image-to-image generation step (diffusers/torch).
+# Runs on Apple Silicon (MPS) or CUDA. Install torch separately if you prefer a
+# specific wheel/build (e.g. the Mac arm64 wheel).
+gen = [
+    "torch>=2.2",
+    "diffusers>=0.30",
+    "transformers>=4.44",
+    "accelerate>=0.33",
+    "safetensors>=0.4",
+]
+
+[project.scripts]
+wewantnoplates = "wewantnoplates.cli:entrypoint"
+
+[tool.setuptools.packages.find]
+include = ["wewantnoplates*"]

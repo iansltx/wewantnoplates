@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Pipeline outputs
+output/
+
+# Local scratch
+*.jpg
+*.jpeg
+*.png
+!tests/**/*.png
