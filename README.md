@@ -8,11 +8,12 @@ circular-saw blade, or a dirty hubcap.
 
 It's an **image-to-image** CLI pipeline. The generator's two inputs are the
 **original photo** and a short **transformation prompt**; the output is the
-edited image. A cloud vision model writes that transformation prompt — it never
-describes the food from scratch (the generator already sees the image). After
-rendering, a *separate* vision model **verifies** the result: if the plate is
-still visible, the pipeline regenerates with a fresh seed, up to a configurable
-number of retries.
+edited image. A local vision model (gemma3:12b via Ollama) writes that
+transformation prompt — it never describes the food from scratch (the generator
+already sees the image). After rendering, a vision model **verifies** the
+result: if the plate is still visible, the pipeline regenerates with a fresh
+seed, up to a configurable number of retries. The whole pipeline runs locally
+(generation + both vision steps) — nothing leaves the machine.
 
 ```
   ┌──────────────┐
@@ -20,7 +21,7 @@ number of retries.
   │ (file / URL) │              │
   └──────────────┘              ▼
          │            ┌──────────────────────────┐
-         │            │ cloud vision (Ollama)    │
+         │            │ vision (Ollama, gemma3)  │
          │            │ writes transformation    │──▶ sidecar prompt
          │            │ prompt (img2img)         │
          │            └──────────────────────────┘
@@ -29,11 +30,11 @@ number of retries.
                       ▼
         ┌──────────────────────────┐
         │ local image-to-image     │──▶ transformed image
-        │ diffusion (diffusers)    │    │
+        │ diffusion (FLUX schnell) │    │
         └──────────────────────────┘    │
                       │                ▼
                       │      ┌──────────────────────────┐
-                      │      │ cloud vision (Ollama)    │
+                      │      │ vision (Ollama, gemma3)  │
                       │      │ verifies plate is gone   │── no → retry (fresh seed)
                       │      └──────────────────────────┘
                       ▼                         ── yes
@@ -59,10 +60,11 @@ terminal. See [Installation](#installation) for prerequisites and
 ## Requirements
 
 - **Ollama** running (defaults to `http://localhost:11434`) with a
-  **vision-capable** model. This project is set up for cloud-hosted models (see
-  `ollama list`); `minimax-m3:cloud` (understanding) and `kimi-k2.6:cloud`
-  (verification) both have `vision` in their capabilities. `glm-5.2:cloud` does
-  **not** support image input via Ollama — avoid it for vision steps.
+  **vision-capable** model. Both vision steps use the local `gemma3:12b` (multimodal).
+  `gemma4:*` MLX builds are **text-only** (no `vision` capability) — they can't see
+  images, so avoid them for vision steps. Cloud vision models (`minimax-m3:cloud`,
+  `kimi-k2.6:cloud`) work too but are optional and billed; `glm-5.2:cloud` does
+  **not** support image input via Ollama.
 - **Python 3.10+** for the understanding path. The generation step additionally
   needs the `diffusers`/`torch` stack, which works on **Apple Silicon (MPS)** or
   a **CUDA GPU** (comfortably within a 64 GB machine; FLUX.1-schnell runs in fp16).
@@ -208,8 +210,8 @@ Other notable settings in the same file:
 | `OLLAMA_HOST` | `http://localhost:11434` | Where Ollama listens |
 | `UNDERSTAND_TIMEOUT_SECONDS` | `300.0` | Max time to wait for the remote vision call |
 | `GENERATOR_BACKEND` | `diffusers` | Image-to-image backend used for rendering |
-| `VISION_MODEL` | `minimax-m3:cloud` | Cloud model that writes the transformation prompt |
-| `VERIFY_MODEL` | `kimi-k2.6:cloud` | Cloud vision model that judges the pass/fail verdict |
+| `VISION_MODEL` | `gemma3:12b` | Local model that writes the transformation prompt |
+| `VERIFY_MODEL` | `gemma3:12b` | Local vision model that judges the pass/fail verdict |
 | `IMG2IMG_MODEL` | `unsloth/FLUX.1-schnell` | Local image-to-image model |
 | `IMG2IMG_STRENGTH` | `0.9` | How strongly the edit is applied (0..1); override per-run with `--strength` |
 | `GENERATOR_STEPS` / `GENERATOR_GUIDANCE` | `8` / `0.0` | Diffusion sampling params (FLUX.1-schnell is distilled, no CFG) |
@@ -233,25 +235,23 @@ a multiple of 8 (required by diffusion models). Examples from a 4:3 source:
 
 ## The three model roles
 
-The pipeline deliberately splits work across a **cloud** understanding model, a
-**local** generation model, and a **cloud** verification model:
+The pipeline splits work across two **local** vision roles and a **local**
+generation role — everything runs on this machine:
 
-- **Understanding — cloud.** `VISION_MODEL` (`minimax-m3:cloud`) runs through
-  Ollama but is hosted remotely. It looks at the photo and writes the
-  transformation prompt, at the cost of a (possibly billed) API. Vision-capable
-  cloud models installed here include `minimax-m3:cloud`, `kimi-k2.6:cloud`,
-  and `gemma4:31b-cloud`.
+- **Understanding — local.** `VISION_MODEL` (`gemma3:12b`) runs through Ollama
+  locally. It looks at the photo and writes the transformation prompt.
+  Vision-capable cloud models (`minimax-m3:cloud`, `kimi-k2.6:cloud`) can be
+  swapped in, but they're optional and billed.
 - **Generation — local.** `IMG2IMG_MODEL` (`unsloth/FLUX.1-schnell`, a non-gated
   mirror of the Apache-2.0 schnell) runs entirely on-device via `diffusers`/
-  PyTorch (MPS on Apple Silicon, or CUDA) in fp16. Nothing leaves the machine,
-  which keeps rendering free and private. The official
+  PyTorch (MPS on Apple Silicon, or CUDA) in fp16. The official
   `black-forest-labs/FLUX.1-schnell` repo works too once you accept its license on
   the HF page. SDXL (`stabilityai/stable-diffusion-xl-base-1.0`) is a lighter
   fallback but clings to the source composition and tends to keep the plate.
-- **Verification — cloud.** `VERIFY_MODEL` (`kimi-k2.6:cloud`) compares the
-  original and generated images and decides pass/fail. Using a *different*,
-  stronger vision model here (rather than reusing the understanding model) gives
-  a more trustworthy verdict.
+- **Verification — local.** `VERIFY_MODEL` (`gemma3:12b`) compares the original
+  and generated images and decides pass/fail. Using a *separate* model from
+  understanding is optional; for a more trustworthy verdict you can point it at a
+  stronger vision model (e.g. `kimi-k2.6:cloud`).
 
 ### Verification & retries
 
@@ -273,11 +273,13 @@ any flat unconventional surface can otherwise read as "still on a plate".
   up to 4 renders).
 - Configure per-invocation with `--retries N`, `--verify-model MODEL`, or
   `--strength X`; disable the check entirely with `--no-verify`.
-- Each attempt costs one extra (possibly billed) vision call to `VERIFY_MODEL`.
+- Each attempt costs one extra vision call to `VERIFY_MODEL` (free when it's a
+  local model).
 
 > **Note on verifiers.** The verifier must be vision-capable through Ollama.
-> `glm-5.2:cloud` is *not* vision-capable via Ollama despite being a strong text
-> model; use `kimi-k2.6:cloud` or `gemma4:31b-cloud` instead.
+> `gemma4:*` MLX builds are text-only (no `vision`), so they can't be used.
+> `glm-5.2:cloud` is also not vision-capable via Ollama. Use `gemma3:12b`
+> (default, local) or a cloud vision model like `kimi-k2.6:cloud` instead.
 
 ---
 
@@ -320,9 +322,9 @@ signature and pointing `GENERATOR_BACKEND` at it (default: `diffusers`).
 
 - The generation step needs the `diffusers`/`torch` stack; `--dry-run` and the
   understanding path work with just the base install.
-- Cloud vision models may require Ollama **usage/balance** (some are billed as
-  "extra usage"). If a call fails with a `402`, the model needs usage or a
-  different free-tier vision model.
+- Cloud vision models (if you opt into them via `--vision-model`/`--verify-model`)
+  may require Ollama **usage/balance** and can be billed; a `402` means the model
+  needs usage. The default `gemma3:12b` is fully local and free.
 - `IMG2IMG_STRENGTH` balances fidelity vs. transformation: too high and the food
   drifts from the original; too low and the plate may not fully disappear.
   FLUX.1-schnell at the default `0.9` removes the plate; at `0.8` it tends to keep

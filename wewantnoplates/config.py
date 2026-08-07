@@ -26,16 +26,15 @@ MAX_SIDE_PIXELS: int = 1024
 # setup (see `ollama list`), but Ollama itself still runs locally on this host.
 OLLAMA_HOST: str = "http://localhost:11434"
 
-# A *vision-capable* model for image understanding. This is the "cloud" model:
-# in this project's setup it's `minimax-m3:cloud` (capabilities include `vision`).
-# (Alternatives already installed with vision: kimi-k3:cloud, kimi-k2.7-code:cloud.)
-VISION_MODEL: str = "minimax-m3:cloud"
+# A *vision-capable* model for image understanding. Fully local via Ollama: gemma3
+# is multimodal (unlike the gemma4 MLX builds, which are text-only).
+VISION_MODEL: str = "gemma3:12b"
 
-# Vision model used to VERIFY the generated image. A stronger model here gives
-# more trustworthy pass/fail verdicts; a weak verifier can misread an absurd
-# surface (e.g. a manhole cover) as a plate. Defaults to a stronger model than
-# the understanding step. Override per-run with --verify-model.
-VERIFY_MODEL: str = "kimi-k2.6:cloud"
+# Vision model used to VERIFY the generated image. Local too (gemma3:12b). A
+# stronger model here gives more trustworthy pass/fail verdicts; a weak verifier
+# can misread an absurd surface (e.g. a manhole cover) as a plate. Override
+# per-run with --verify-model.
+VERIFY_MODEL: str = "gemma3:12b"
 
 # How long to allow the (remote, cloud) understanding call to run.
 UNDERSTAND_TIMEOUT_SECONDS: float = 300.0
