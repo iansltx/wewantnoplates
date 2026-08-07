@@ -25,13 +25,35 @@ from .pipeline import run_pipeline
 @click.option(
     "--vision-model",
     default=None,
-    help="Cloud vision model via Ollama (default: config.VISION_MODEL).",
+    help="Cloud vision model that writes the prompt (default: config.VISION_MODEL).",
+)
+@click.option(
+    "--verify-model",
+    default=None,
+    help="Vision model used to verify the result (default: config.VERIFY_MODEL).",
 )
 @click.option(
     "--seed",
     type=int,
     default=None,
     help="Generation seed for reproducibility (default: config.GENERATOR_SEED).",
+)
+@click.option(
+    "--retries",
+    type=int,
+    default=None,
+    help="Max regeneration retries when verification fails (default: config.VERIFY_RETRIES).",
+)
+@click.option(
+    "--strength",
+    type=float,
+    default=None,
+    help="IMG2IMG strength 0..1 (default: config.IMG2IMG_STRENGTH).",
+)
+@click.option(
+    "--no-verify",
+    is_flag=True,
+    help="Skip verification/retry; render a single image.",
 )
 @click.option(
     "--dry-run",
@@ -44,7 +66,11 @@ def main(
     max_side: int | None,
     out_dir: str | None,
     vision_model: str | None,
+    verify_model: str | None,
     seed: int | None,
+    retries: int | None,
+    strength: float | None,
+    no_verify: bool,
     dry_run: bool,
 ) -> None:
     """Turn food on a plate into food NOT on a plate (r/wewantplates style).
@@ -56,7 +82,11 @@ def main(
         max_side=max_side,
         out_dir=out_dir,
         vision_model=vision_model,
+        verify_model=verify_model,
         seed=seed,
+        retries=retries,
+        strength=strength,
+        verify_output=not no_verify,
         dry_run=dry_run,
     )
 
@@ -69,6 +99,23 @@ def main(
         click.echo("(dry-run: image generation skipped)")
     else:
         click.echo(f"Image saved: {result.output_path}")
+        _echo_verification(result, retries)
+
+
+def _echo_verification(result, retries: int | None) -> None:
+    """Print the verification verdict and how many attempts were made."""
+    from . import config
+
+    max_attempts = 1 + (retries if retries is not None else config.VERIFY_RETRIES)
+    v = result.verification
+    if v is None:
+        click.echo("Verification: skipped")
+    elif v.passed:
+        click.echo(f"Verification: passed (attempt {result.attempts}/{max_attempts})")
+    else:
+        click.echo(
+            f"Verification: FAILED after {result.attempts} attempt(s) — {v.reason}"
+        )
 
 
 def entrypoint() -> None:  # console-script hook

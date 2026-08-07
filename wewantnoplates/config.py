@@ -31,6 +31,12 @@ OLLAMA_HOST: str = "http://localhost:11434"
 # (Alternatives already installed with vision: kimi-k3:cloud, kimi-k2.7-code:cloud.)
 VISION_MODEL: str = "minimax-m3:cloud"
 
+# Vision model used to VERIFY the generated image. A stronger model here gives
+# more trustworthy pass/fail verdicts; a weak verifier can misread an absurd
+# surface (e.g. a manhole cover) as a plate. Defaults to a stronger model than
+# the understanding step. Override per-run with --verify-model.
+VERIFY_MODEL: str = "kimi-k2.6:cloud"
+
 # How long to allow the (remote, cloud) understanding call to run.
 UNDERSTAND_TIMEOUT_SECONDS: float = 300.0
 
@@ -42,19 +48,30 @@ UNDERSTAND_TIMEOUT_SECONDS: float = 300.0
 GENERATOR_BACKEND: str = "diffusers"
 
 # Hugging Face model id for the image-to-image pipeline.
-# SDXL is a good quality/speed default; FLUX.1-dev gives higher quality but is
-# slower and needs more memory (fine in 64 GB).
-IMG2IMG_MODEL: str = "stabilityai/stable-diffusion-xl-base-1.0"
+# FLUX.1-schnell (via a non-gated mirror; schnell is Apache-2.0) follows prompts
+# far better than SDXL and renders in a few steps, which suits the verify/retry
+# loop. The official black-forest-labs/FLUX.1-schnell repo works too once you
+# accept its license on the HF page. SDXL is a lighter fallback but clings to
+# the source composition.
+IMG2IMG_MODEL: str = "unsloth/FLUX.1-schnell"
 
 # How strongly the edit is applied (0..1). Lower = closer to the source photo.
-IMG2IMG_STRENGTH: float = 0.65
+# Set high enough that the plate actually disappears; verification+retries then
+# catch any residual failures.
+IMG2IMG_STRENGTH: float = 0.9
 
-# Generation parameters.
-GENERATOR_STEPS: int = 40
-GENERATOR_GUIDANCE: float = 7.5
+# Generation parameters. FLUX.1-schnell is a 4-step distilled model: it uses few
+# steps and no classifier-free guidance (guidance 0). SDXL would want ~40 / 7.5.
+GENERATOR_STEPS: int = 8
+GENERATOR_GUIDANCE: float = 0.0
 
 # Fixed seed for reproducible output. Set to None for random generations.
 GENERATOR_SEED: int | None = 42
+
+# How many times to regenerate if verification reports the transformation wasn't
+# applied (e.g. the plate is still visible). The first render plus these retries
+# are attempted, each with a fresh seed. Set to 0 for a single attempt.
+VERIFY_RETRIES: int = 3
 
 # ---------------------------------------------------------------------------
 # Output

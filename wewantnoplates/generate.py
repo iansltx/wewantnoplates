@@ -13,6 +13,7 @@ selected backend is imported at call time so the pipeline can still run in
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 from PIL import Image
 
@@ -45,7 +46,12 @@ def _pick_device() -> str:
 
 
 class DiffusersImg2ImgGenerator(ImageGenerator):
-    """Image-to-image generation via the diffusers library."""
+    """Image-to-image generation via the diffusers library.
+
+    The heavy diffusion pipeline is loaded lazily on the first ``generate`` call
+    and cached on the instance, so retries (verification failures) reuse the
+    already-loaded model instead of reloading it each time.
+    """
 
     name: str = "diffusers"
 
@@ -60,26 +66,26 @@ class DiffusersImg2ImgGenerator(ImageGenerator):
         self.steps = steps if steps is not None else config.GENERATOR_STEPS
         self.guidance = guidance if guidance is not None else config.GENERATOR_GUIDANCE
         self.strength = strength if strength is not None else config.IMG2IMG_STRENGTH
+        self._pipe: Any = None  # lazily loaded and reused across generate()
+        self._device: str | None = None
 
-    def generate(
-        self,
-        image: Image.Image,
-        prompt: str,
-        width: int,
-        height: int,
-        seed: int | None,
-    ) -> Image.Image:
+    def _load_pipe(self):
+        """Load the diffusion pipeline once and return the cached instance."""
+        if self._pipe is not None:
+            return self._pipe
+
         try:
             import torch
-            from diffusers import AutoPipelineForImage2Image
+            from diffusers.pipelines.auto_pipeline import AutoPipelineForImage2Image
         except ImportError as exc:  # pragma: no cover - heavy dep
             raise SystemExit(
                 "The `diffusers`/`torch` packages are required for generation.\n"
                 "Install with:  pip install -e '.[gen]'"
             ) from exc
 
-        device = _pick_device()
-        dtype = torch.float16 if device == "cuda" else torch.float32
+        self._device = _pick_device()
+        # fp16 on CUDA and Apple Silicon so FLUX fits in 64 GB unified memory.
+        dtype = torch.float16 if self._device != "cpu" else torch.float32
         try:
             pipe = AutoPipelineForImage2Image.from_pretrained(
                 self.model_id,
@@ -90,7 +96,21 @@ class DiffusersImg2ImgGenerator(ImageGenerator):
             pipe = AutoPipelineForImage2Image.from_pretrained(
                 self.model_id, torch_dtype=dtype
             )
-        pipe = pipe.to(device)
+        self._pipe = pipe.to(self._device)
+        return self._pipe
+
+    def generate(
+        self,
+        image: Image.Image,
+        prompt: str,
+        width: int,
+        height: int,
+        seed: int | None,
+    ) -> Image.Image:
+        import torch
+
+        pipe = self._load_pipe()
+        device = self._device or _pick_device()
 
         init = image.convert("RGB").resize((width, height), Image.Resampling.LANCZOS)
 
@@ -109,9 +129,12 @@ class DiffusersImg2ImgGenerator(ImageGenerator):
         return result
 
 
-def build_generator(backend: str | None = None) -> ImageGenerator:
-    """Return the configured generator backend instance."""
+def build_generator(backend: str | None = None, strength: float | None = None) -> ImageGenerator:
+    """Return the configured generator backend instance.
+
+    ``strength`` overrides ``config.IMG2IMG_STRENGTH`` when provided.
+    """
     backend = (backend or config.GENERATOR_BACKEND).lower()
     if backend in ("diffusers", "diffuser"):
-        return DiffusersImg2ImgGenerator()
+        return DiffusersImg2ImgGenerator(strength=strength)
     raise SystemExit(f"Unknown GENERATOR_BACKEND: {backend!r}")

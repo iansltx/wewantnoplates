@@ -15,3 +15,11 @@ output/
 *.jpeg
 *.png
 !tests/**/*.png
+
+# Secrets — never commit
+hf-token.txt
+*.token
+.env
+
+# macOS
+.DS_Store

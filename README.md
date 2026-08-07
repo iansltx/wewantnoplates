@@ -8,9 +8,11 @@ circular-saw blade, or a dirty hubcap.
 
 It's an **image-to-image** CLI pipeline. The generator's two inputs are the
 **original photo** and a short **transformation prompt**; the output is the
-edited image. The cloud vision model's only job is to write that transformation
-prompt — it never describes the food from scratch (the generator already sees
-the image).
+edited image. A cloud vision model writes that transformation prompt — it never
+describes the food from scratch (the generator already sees the image). After
+rendering, a *separate* vision model **verifies** the result: if the plate is
+still visible, the pipeline regenerates with a fresh seed, up to a configurable
+number of retries.
 
 ```
   ┌──────────────┐
@@ -26,10 +28,31 @@ the image).
          └────────────┬───────────┘
                       ▼
         ┌──────────────────────────┐
-        │ local image-to-image     │──▶ transformed image saved locally
-        │ diffusion (diffusers)    │
-        └──────────────────────────┘
+        │ local image-to-image     │──▶ transformed image
+        │ diffusion (diffusers)    │    │
+        └──────────────────────────┘    │
+                      │                ▼
+                      │      ┌──────────────────────────┐
+                      │      │ cloud vision (Ollama)    │
+                      │      │ verifies plate is gone   │── no → retry (fresh seed)
+                      │      └──────────────────────────┘
+                      ▼                         ── yes
+               saved locally            saved locally
 ```
+
+---
+
+## Quickstart
+
+```bash
+pip install -e "./[gen]"
+wewantnoplates photo_of_food_on_a_plate.jpg
+# -> output/wewantnoplates-<timestamp>.png  (plus a sidecar .json)
+```
+
+The output image, the sidecar prompt, and the resolution are all printed to the
+terminal. See [Installation](#installation) for prerequisites and
+[Usage](#usage) for the full options.
 
 ---
 
@@ -37,12 +60,19 @@ the image).
 
 - **Ollama** running (defaults to `http://localhost:11434`) with a
   **vision-capable** model. This project is set up for cloud-hosted models (see
-  `ollama list`); the default is `minimax-m3:cloud`, which has `vision` in its
-  capabilities.
+  `ollama list`); `minimax-m3:cloud` (understanding) and `kimi-k2.6:cloud`
+  (verification) both have `vision` in their capabilities. `glm-5.2:cloud` does
+  **not** support image input via Ollama — avoid it for vision steps.
 - **Python 3.10+** for the understanding path. The generation step additionally
   needs the `diffusers`/`torch` stack, which works on **Apple Silicon (MPS)** or
-  a **CUDA GPU** (comfortably within a 64 GB machine).
-- First generation run downloads the model weights from Hugging Face (a few GB).
+  a **CUDA GPU** (comfortably within a 64 GB machine; FLUX.1-schnell runs in fp16).
+- First generation run downloads the model weights from Hugging Face. The default
+  `IMG2IMG_MODEL` is FLUX.1-schnell (~34 GB download / ~35 GB on disk in fp16). A
+  lighter fallback is SDXL (`stabilityai/stable-diffusion-xl-base-1.0`, ~7 GB
+  download / ~14 GB on disk), but it clings to the source plate.
+- FLUX.1-schnell's official repo is gated; the default uses a non-gated mirror
+  (`unsloth/FLUX.1-schnell`). To use the official repo instead, accept its license
+  on the HF page and set `IMG2IMG_MODEL = "black-forest-labs/FLUX.1-schnell"`.
 
 ---
 
@@ -86,9 +116,37 @@ wewantnoplates my_steak_dinner.jpg --max-side 768
 # Write somewhere specific + reproducible seed
 wewantnoplates my_steak_dinner.jpg --out-dir ./gallery --seed 7
 
+# Use a specific cloud vision model
+wewantnoplates my_steak_dinner.jpg --vision-model minimax-m3:cloud
+
 # Understanding + prompt only (no rendering) — handy for testing
 wewantnoplates my_steak_dinner.jpg --dry-run
+
+# Tune verification: allow up to 5 retries if the plate isn't gone
+wewantnoplates my_steak_dinner.jpg --retries 5
+
+# Sweep the edit strength without editing config.py (0..1)
+wewantnoplates my_steak_dinner.jpg --strength 0.9
+
+# Turn verification/retry off entirely (single render, like before)
+wewantnoplates my_steak_dinner.jpg --no-verify
 ```
+
+### Options
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--max-side N` | `config.MAX_SIDE_PIXELS` (`1024`) | Max pixels along the longest output side |
+| `--out-dir DIR` | `config.OUTPUT_DIR` (`output`) | Where images + sidecar JSON are written |
+| `--vision-model MODEL` | `config.VISION_MODEL` | Cloud vision model (via Ollama) that writes the prompt |
+| `--verify-model MODEL` | `config.VERIFY_MODEL` | Cloud vision model that judges pass/fail |
+| `--seed N` | `config.GENERATOR_SEED` (`42`) | Generation seed for reproducibility |
+| `--strength X` | `config.IMG2IMG_STRENGTH` (`0.9`) | Edit strength 0..1; higher = more transformation |
+| `--retries N` | `config.VERIFY_RETRIES` (`3`) | Max regeneration retries when verification fails |
+| `--no-verify` | off | Skip verification/retry; render a single image |
+| `--dry-run` | off | Run understanding + prompt only; skip rendering |
+| `-h` / `--help` | — | Show help and exit |
+| `--version` | — | Show version and exit |
 
 Typical output:
 
@@ -101,6 +159,7 @@ Transformation prompt:
 Output size: 1024x768
 Prompt saved: output/wewantnoplates-<timestamp>.json
 Image saved:  output/wewantnoplates-<timestamp>.png
+Verification: passed (attempt 1/4)
 ```
 
 ---
@@ -111,13 +170,19 @@ The generator is image-to-image:
 
 - **Input image** — the original photo, resized to the target size.
 - **Transformation prompt** — a short instruction (≤ ~60 words) that only
-  states the *change*: move the food off the plate and re-serve it on a specific
-  absurd surface in r/wewantplates style. It does **not** describe the food,
-  ingredients, or existing scene.
+  states the *change*: take the food off the plate and re-serve it directly on
+  a specific absurd surface in r/wewantplates style, and make the plate/tableware
+  disappear. It does **not** describe the food, ingredients, or existing scene,
+  and it deliberately does **not** ask the generator to preserve the original
+  plate or table.
 
 The cloud vision model (Ollama) looks at the photo and writes that
 transformation prompt. That prompt is saved verbatim as a sidecar `.json` next
 to the output image, so every edit is reproducible and inspectable.
+
+The sidecar also records the **verification verdict**: how many render attempts
+were made, whether the check passed, and the reason the model gave. If the check
+failed, generation is retried with a fresh seed (see [Verification & retries](#verification--retries)).
 
 ---
 
@@ -141,11 +206,15 @@ Other notable settings in the same file:
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `OLLAMA_HOST` | `http://localhost:11434` | Where Ollama listens |
+| `UNDERSTAND_TIMEOUT_SECONDS` | `300.0` | Max time to wait for the remote vision call |
+| `GENERATOR_BACKEND` | `diffusers` | Image-to-image backend used for rendering |
 | `VISION_MODEL` | `minimax-m3:cloud` | Cloud model that writes the transformation prompt |
-| `IMG2IMG_MODEL` | `stabilityai/stable-diffusion-xl-base-1.0` | Local image-to-image model |
-| `IMG2IMG_STRENGTH` | `0.65` | How strongly the edit is applied (0..1) |
-| `GENERATOR_STEPS` / `GENERATOR_GUIDANCE` | `40` / `7.5` | Diffusion sampling parameters |
+| `VERIFY_MODEL` | `kimi-k2.6:cloud` | Cloud vision model that judges the pass/fail verdict |
+| `IMG2IMG_MODEL` | `unsloth/FLUX.1-schnell` | Local image-to-image model |
+| `IMG2IMG_STRENGTH` | `0.9` | How strongly the edit is applied (0..1); override per-run with `--strength` |
+| `GENERATOR_STEPS` / `GENERATOR_GUIDANCE` | `8` / `0.0` | Diffusion sampling params (FLUX.1-schnell is distilled, no CFG) |
 | `GENERATOR_SEED` | `42` | Reproducibility (set `None` for random) |
+| `VERIFY_RETRIES` | `3` | Max regeneration retries if verification fails (each uses a fresh seed) |
 | `OUTPUT_DIR` | `output` | Where images + sidecar JSON go |
 
 ### How the destination size works
@@ -162,19 +231,53 @@ a multiple of 8 (required by diffusion models). Examples from a 4:3 source:
 
 ---
 
-## The two model roles
+## The three model roles
 
-The pipeline deliberately mixes a **cloud** model for understanding and a
-**local** model for generation:
+The pipeline deliberately splits work across a **cloud** understanding model, a
+**local** generation model, and a **cloud** verification model:
 
-- **Understanding — cloud.** The vision model runs through Ollama but is hosted
-  remotely (the Ollama account's cloud models). It writes the transformation
-  prompt, at the cost of a (possibly billed) API. Vision-capable models already
-  installed here include `minimax-m3:cloud`, `kimi-k3:cloud`, and
-  `kimi-k2.7-code:cloud`.
-- **Generation — local.** The image-to-image edit happens entirely on-device via
-  `diffusers`/PyTorch (MPS on Apple Silicon, or CUDA). Nothing leaves the
-  machine, which keeps rendering free and private.
+- **Understanding — cloud.** `VISION_MODEL` (`minimax-m3:cloud`) runs through
+  Ollama but is hosted remotely. It looks at the photo and writes the
+  transformation prompt, at the cost of a (possibly billed) API. Vision-capable
+  cloud models installed here include `minimax-m3:cloud`, `kimi-k2.6:cloud`,
+  and `gemma4:31b-cloud`.
+- **Generation — local.** `IMG2IMG_MODEL` (`unsloth/FLUX.1-schnell`, a non-gated
+  mirror of the Apache-2.0 schnell) runs entirely on-device via `diffusers`/
+  PyTorch (MPS on Apple Silicon, or CUDA) in fp16. Nothing leaves the machine,
+  which keeps rendering free and private. The official
+  `black-forest-labs/FLUX.1-schnell` repo works too once you accept its license on
+  the HF page. SDXL (`stabilityai/stable-diffusion-xl-base-1.0`) is a lighter
+  fallback but clings to the source composition and tends to keep the plate.
+- **Verification — cloud.** `VERIFY_MODEL` (`kimi-k2.6:cloud`) compares the
+  original and generated images and decides pass/fail. Using a *different*,
+  stronger vision model here (rather than reusing the understanding model) gives
+  a more trustworthy verdict.
+
+### Verification & retries
+
+Generation is image-to-image with a fixed `IMG2IMG_STRENGTH` (default `0.9`),
+which is a compromise: too low and the original plate refuses to disappear (the
+init image pins it in place — even FLUX at 0.8 keeps the plate); too high and the
+food drifts from the original. To catch the former, the pipeline sends **both the
+original photo and the generated result** to `VERIFY_MODEL`, which judges by
+*comparing* them whether the food has moved off the original plate onto a
+different, unconventional surface while still looking like the same food.
+Comparing to the original is deliberate: a round food (e.g. a whole pizza) on
+any flat unconventional surface can otherwise read as "still on a plate".
+
+- **On failure**, the image is regenerated with a **fresh seed** (the configured
+  seed plus the attempt number) and checked again. The diffusion pipeline is
+  loaded **once** and reused across attempts, so retries only cost an extra
+  render, not another model load.
+- **Attempts** = 1 render + `VERIFY_RETRIES` retries (so the default `3` means
+  up to 4 renders).
+- Configure per-invocation with `--retries N`, `--verify-model MODEL`, or
+  `--strength X`; disable the check entirely with `--no-verify`.
+- Each attempt costs one extra (possibly billed) vision call to `VERIFY_MODEL`.
+
+> **Note on verifiers.** The verifier must be vision-capable through Ollama.
+> `glm-5.2:cloud` is *not* vision-capable via Ollama despite being a strong text
+> model; use `kimi-k2.6:cloud` or `gemma4:31b-cloud` instead.
 
 ---
 
@@ -209,7 +312,7 @@ def generate(self, image: Image, prompt: str, width: int, height: int, seed) -> 
 ```
 
 Add a new backend (e.g. an MLX image-to-image model) by implementing that
-signature and pointing `GENERATOR_BACKEND` at it. The default is `diffusers`.
+signature and pointing `GENERATOR_BACKEND` at it (default: `diffusers`).
 
 ---
 
@@ -222,3 +325,9 @@ signature and pointing `GENERATOR_BACKEND` at it. The default is `diffusers`.
   different free-tier vision model.
 - `IMG2IMG_STRENGTH` balances fidelity vs. transformation: too high and the food
   drifts from the original; too low and the plate may not fully disappear.
+  FLUX.1-schnell at the default `0.9` removes the plate; at `0.8` it tends to keep
+  the original plate (the init image pins it in place). The verify/retry loop
+  catches residual failures automatically.
+- Verification compares the original and generated images and is told that a
+  round food on an unconventional surface is not a plate. If a verifier is still
+  stubborn for a round dish, switch `--verify-model` or eyeball the saved PNG.
