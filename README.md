@@ -178,7 +178,7 @@ The generator is image-to-image:
   and it deliberately does **not** ask the generator to preserve the original
   plate or table.
 
-The cloud vision model (Ollama) looks at the photo and writes that
+The separate vision model (gemma3 12B by default) looks at the photo and writes that
 transformation prompt. That prompt is saved verbatim as a sidecar `.json` next
 to the output image, so every edit is reproducible and inspectable.
 
