@@ -1,6 +1,6 @@
 # wewantnoplates
 
-Turn a photo of food *on a plate* into a photo of the same food defiantly
+Turn a photo of food *on a plate* into a photo of the same food definitely
 **NOT on a plate** — in the proud tradition of
 [/r/wewantplates](https://www.reddit.com/r/wewantplates/). Give it a pizza on
 ceramic; get back the same pizza balanced on a rusty garden shovel, a
