@@ -130,7 +130,7 @@ wewantnoplates my_steak_dinner.jpg --retries 5
 # Sweep the edit strength without editing config.py (0..1)
 wewantnoplates my_steak_dinner.jpg --strength 0.9
 
-# Turn verification/retry off entirely (single render, like before)
+# Turn verification/retry off entirely (single render)
 wewantnoplates my_steak_dinner.jpg --no-verify
 ```
 
