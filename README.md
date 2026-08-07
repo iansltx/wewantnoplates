@@ -15,6 +15,14 @@ result: if the plate is still visible, the pipeline regenerates with a fresh
 seed, up to a configurable number of retries. The whole pipeline runs locally
 (generation + both vision steps) — nothing leaves the machine.
 
+This project was partially intended as a test bench for how hard I could push
+DeepSeek V4 Flash 0731, as well as whether I could make this work with fully
+local models on my M1 Max MacBook Pro with 64GB of unified memory. All of the
+code and most of the readme (see commits for exceptions; you can probably tell
+which ones I wrote by hand) are generated, primarily by Flash but with a detour
+to GLM 5.2 when I thought I could use it in the loop to verify images (nope).
+Used Zed's built-in harness throughout, and Ollama Cloud for all cloud inference.
+
 ```
   ┌──────────────┐
   │ input image  │──────────────┐
